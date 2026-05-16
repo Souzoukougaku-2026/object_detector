@@ -17,7 +17,6 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import com.example.wasuremono_prj.data.Config
 import com.example.wasuremono_prj.data.Detection
 
 @Composable
@@ -45,24 +44,15 @@ fun BoundingBoxOverlay(detections: List<Detection>) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val previewWidth = size.width
         val previewHeight = size.height
-        val modelInputSize = Config.MODEL_INPUT_SIZE.toFloat()
-
-        // スケール計算（既存）
-        val scaleX = previewWidth / modelInputSize
-        val scaleY = previewHeight / modelInputSize
-        val scale = maxOf(scaleX, scaleY)
-
-        val offsetX = (previewWidth - modelInputSize * scale) / 2f
-        val offsetY = (previewHeight - modelInputSize * scale) / 2f
 
         detections.forEach { detection ->
             val box = detection.box
 
             // 90度の回転
-            val left = (1.0f - box[2]) * modelInputSize * scale + offsetX
-            val top = box[1] * modelInputSize * scale + offsetY
-            val right = (1.0f - box[0]) * modelInputSize * scale + offsetX
-            val bottom = box[3] * modelInputSize * scale + offsetY
+            val left = box[0] * previewWidth
+            val top = box[1] * previewHeight
+            val right = box[2] * previewWidth
+            val bottom = box[3] * previewHeight
 
             // バウンティボックスの描画
             drawRect(
