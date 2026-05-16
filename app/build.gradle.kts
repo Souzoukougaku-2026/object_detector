@@ -56,19 +56,21 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
-    implementation("com.google.ai.edge.litert:litert:1.0.1")
+    val litertVersion = "1.0.1"
+    implementation("com.google.ai.edge.litert:litert:$litertVersion")
 // 画像処理（SSD MobileNetには必須）
-    implementation("com.google.ai.edge.litert:litert-support-api:1.0.1")
+    implementation("com.google.ai.edge.litert:litert-support-api:$litertVersion")
 // GPU加速を利用する場合
-    implementation("com.google.ai.edge.litert:litert-gpu:1.0.1")
+    implementation("com.google.ai.edge.litert:litert-gpu:$litertVersion")
+    implementation("com.google.ai.edge.litert:litert-gpu-api:${litertVersion}")
 // メタデータの読み取り
-    implementation("com.google.ai.edge.litert:litert-metadata:1.0.1")
+    implementation("com.google.ai.edge.litert:litert-metadata:$litertVersion")
 
-    val camerax_version = "1.6.0" // または最新版
-    implementation("androidx.camera:camera-core:$camerax_version")
-    implementation("androidx.camera:camera-camera2:$camerax_version")
-    implementation("androidx.camera:camera-lifecycle:$camerax_version")
-    implementation("androidx.camera:camera-video:$camerax_version")
-    implementation("androidx.camera:camera-view:$camerax_version")
-    implementation("androidx.camera:camera-extensions:$camerax_version")
+    // CameraX
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.video)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.androidx.camera.extensions)
 }

@@ -7,269 +7,63 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.*
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.example.wasuremono_prj.ui.DetectorScreen
 import com.example.wasuremono_prj.ui.theme.Wasuremono_prjTheme
-import org.tensorflow.lite.Interpreter
-import java.util.concurrent.Executors
-import org.tensorflow.lite.support.common.FileUtil
-import org.tensorflow.lite.support.image.ImageProcessor
-import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.support.image.ops.ResizeOp
-import org.tensorflow.lite.support.metadata.MetadataExtractor
+
 class MainActivity : ComponentActivity() {
 
-    private var interpreter: Interpreter? = null
-    private var labels: List<String> = emptyList()
-
-    data class Detection(
-        val label: String,
-        val score: Float,
-        val box: FloatArray
-    )
-
+    private var hasPermission by mutableStateOf(false)
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        if (isGranted) recreate()
-        else Log.e("LiteRT", "Camera permission denied")
-    }
-
-    companion object {
-        private const val MODEL_PATH = "ssdmobilenetv1.tflite"
-        private const val LABEL_PATH = "labels.txt"
-        private const val CONFIDENCE_THRESHOLD = 0.5f
+        hasPermission = isGranted
+        if (!isGranted) Log.e("LiteRT", "Camera permission denied")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         checkCameraPermission()
-        initLiteRT()
+        if (!hasPermission) {
+            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
 
         setContent {
-            Wasuremono_prjTheme()  {
+            Wasuremono_prjTheme {
                 val context = LocalContext.current
-                val hasPermission = remember {
-                    ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.CAMERA
-                    ) == PackageManager.PERMISSION_GRANTED
-                }
 
-                if (hasPermission) DetectorScreen()
-                else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("カメラ権限が必要です")
+                if (hasPermission) {
+                    DetectorScreen()
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("カメラの権限が必要です")
+                    }
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        checkCameraPermission()
     }
 
     private fun checkCameraPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            != PackageManager.PERMISSION_GRANTED
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
         ) {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
-        }
-    }
-
-    private fun initLiteRT() {
-        try {
-            val model = FileUtil.loadMappedFile(this, MODEL_PATH)
-            interpreter = Interpreter(model, Interpreter.Options().setNumThreads(4))
-
-            val extractor = MetadataExtractor(model)
-
-            // metadataにlabelがあるか確認
-            val files = extractor.associatedFileNames
-            Log.d("LiteRT", "Associated files: $files")
-            if(MODEL_PATH=="ssdmobilenetv1.tflite"){
-                if (files.contains("labelmap.txt")) {
-                    val inputStream = extractor.getAssociatedFile("labelmap.txt")
-                    labels = inputStream.bufferedReader().readLines()
-                } else {
-                    Log.e("LiteRT", "labelmap.txt not found in metadata")
-                    labels = emptyList()
-                }
-            }
-            else if(MODEL_PATH=="ssdmobilenetv3.tflite"){
-                if (files.contains("labels.txt")) {
-                    val inputStream = extractor.getAssociatedFile("labelmap.txt")
-                    labels = inputStream.bufferedReader().readLines()
-                } else {
-                    Log.e("LiteRT", "labelmap.txt not found in metadata")
-                    labels = emptyList()
-                }
-            }
-
-
-            Log.d("LiteRT", "labels size = ${labels.size}")
-
-        } catch (e: Exception) {
-            Log.e("LiteRT", "Init failed: ${e.message}")
-        }
-    }
-
-    @Composable
-    fun DetectorScreen() {
-        val context = LocalContext.current
-        val lifecycleOwner = LocalLifecycleOwner.current
-        val executor = remember { Executors.newSingleThreadExecutor() }
-
-        val detections = remember { mutableStateListOf<Detection>() }
-        var fps by remember { mutableStateOf(0f) }
-
-        val previewView = remember { PreviewView(context) }
-
-        LaunchedEffect(Unit) {
-            val cameraProvider = ProcessCameraProvider.getInstance(context).get()
-
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
-            }
-
-            val imageAnalysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .build()
-
-            var lastTime = System.currentTimeMillis()
-
-            imageAnalysis.setAnalyzer(executor) { imageProxy ->
-                val bitmap = imageProxy.toBitmap()
-                val interp = interpreter
-
-                if (bitmap != null && interp != null) {
-                    val processor = ImageProcessor.Builder()
-                        .add(ResizeOp(300, 300, ResizeOp.ResizeMethod.BILINEAR))
-                        .build()
-
-                    var tensor = TensorImage(interp.getInputTensor(0).dataType())
-                    tensor.load(bitmap)
-                    tensor = processor.process(tensor)
-
-                    val locations = Array(1) { Array(10) { FloatArray(4) } }
-                    val classes = Array(1) { FloatArray(10) }
-                    val scores = Array(1) { FloatArray(10) }
-                    val num = FloatArray(1)
-
-                    val outputs = mapOf(
-                        0 to locations,
-                        1 to classes,
-                        2 to scores,
-                        3 to num
-                    )
-
-                    interp.runForMultipleInputsOutputs(
-                        arrayOf(tensor.buffer),
-                        outputs
-                    )
-
-                    val result = mutableListOf<Detection>()
-                    val count = num[0].toInt()
-
-                    for (i in 0 until count) {
-                        val score = scores[0][i]
-                        if (score > CONFIDENCE_THRESHOLD) {
-                            val label = labels.getOrNull(classes[0][i].toInt()) ?: "Unknown"
-                            result.add(Detection(label, score, locations[0][i]))
-                        }
-                    }
-
-                    val now = System.currentTimeMillis()
-                    val currentFps = 1000f / (now - lastTime)
-                    lastTime = now
-
-                    ContextCompat.getMainExecutor(context).execute {
-                        detections.clear()
-                        detections.addAll(result)
-                        fps = currentFps
-                    }
-                }
-                imageProxy.close()
-            }
-
-            cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                CameraSelector.DEFAULT_BACK_CAMERA,
-                preview,
-                imageAnalysis
-            )
-        }
-
-        Box(Modifier.fillMaxSize()) {
-
-            AndroidView(
-                factory = { previewView },
-                modifier = Modifier.fillMaxSize()
-            )
-
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val previewWidth = size.width
-                val previewHeight = size.height
-
-// 入力画像サイズ（modelに入れたサイズ）
-                val inputSize = 300f
-
-// スケール（centerCrop）
-                val scale = maxOf(
-                    previewWidth / inputSize,
-                    previewHeight / inputSize
-                )
-
-// クロップで削られるオフセット
-                val dx = (previewWidth - inputSize * scale) / 2f
-                val dy = (previewHeight - inputSize * scale) / 2f
-
-                detections.forEach {
-                    val box = it.box
-
-                    val left = box[1] * inputSize * scale + dx
-                    val top = box[0] * inputSize * scale + dy
-                    val right = box[3] * inputSize * scale + dx
-                    val bottom = box[2] * inputSize * scale + dy
-
-                    drawRect(
-                        color = Color.Red,
-                        topLeft = Offset(left, top),
-                        size = Size(right - left, bottom - top),
-                        style = Stroke(width = 4f)
-                    )
-                }
-            }
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
-            Text("FPS: %.1f".format(fps), color = Color.Yellow)
-
-            detections.forEach {
-                Text(
-                    "${it.label}: %.2f".format(it.score),
-                    color = Color.Green
-                )
-            }
+            hasPermission = true;
         }
     }
 }
