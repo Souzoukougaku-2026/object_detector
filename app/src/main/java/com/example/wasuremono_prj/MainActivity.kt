@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import com.example.wasuremono_prj.tester.CropPreviewScreen
 import com.example.wasuremono_prj.ui.DetectorScreen
 import com.example.wasuremono_prj.ui.theme.Wasuremono_prjTheme
 
@@ -42,7 +43,8 @@ class MainActivity : ComponentActivity() {
                 val context = LocalContext.current
 
                 if (hasPermission) {
-                    DetectorScreen()
+                    //DetectorScreen()
+                    CropPreviewScreen()
                 } else {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("カメラの権限が必要です")

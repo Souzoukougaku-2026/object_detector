@@ -65,7 +65,7 @@ dependencies {
     implementation("com.google.ai.edge.litert:litert-gpu-api:${litertVersion}")
 // メタデータの読み取り
     implementation("com.google.ai.edge.litert:litert-metadata:$litertVersion")
-
+    testImplementation("io.mockk:mockk:1.13.5")
     // CameraX
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)
