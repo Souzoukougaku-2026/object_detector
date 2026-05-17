@@ -29,6 +29,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.wasuremono_prj.data.Detection
 import com.example.wasuremono_prj.detector.ObjectDetector
 import com.example.wasuremono_prj.ui.components.BoundingBoxOverlay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 
 @Composable
@@ -44,45 +46,74 @@ fun DetectorScreen() {
 
     // カメラと物体認識のセットアップ処理
     LaunchedEffect(Unit) {
-        val cameraProvider = ProcessCameraProvider.getInstance(context).get()
-        val detector = ObjectDetector(context)
 
-        // AIの推論が終わるたびに呼ばれる処理
-        detector.onResults = { newDetections, currentFps ->
-            // UIの更新は必ずメインスレッドで行う
-            ContextCompat.getMainExecutor(context).execute {
-                detections.clear()
-                detections.addAll(newDetections)
-                fps = currentFps
+        val cameraProviderFuture =
+            ProcessCameraProvider.getInstance(context)
+
+        cameraProviderFuture.addListener({
+
+            val cameraProvider = cameraProviderFuture.get()
+
+            val preview = Preview.Builder()
+                .build()
+                .also {
+                    it.surfaceProvider =
+                        previewView.surfaceProvider
+                }
+
+            val imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(
+                    ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+                )
+                .build()
+
+            try {
+
+                cameraProvider.unbindAll()
+
+                // まずPreviewだけ表示
+                cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview,
+                    imageAnalysis
+                )
+
+            } catch (e: Exception) {
+                Log.e("CameraX", "Binding failed", e)
             }
-        }
 
-        val preview = Preview.Builder().build().also {
-            it.surfaceProvider = previewView.surfaceProvider
-        }
+            // ===== GPU初期化は裏 =====
 
-        val imageAnalysis = ImageAnalysis.Builder()
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-            .build()
-            .also {
-                // 先ほど作成したdetectorをアナライザーとしてセット
-                it.setAnalyzer(executor, detector)
+            executor.execute {
+
+                val detector = ObjectDetector(context)
+
+                detector.onResults = {
+                        newDetections,
+                        currentFps ->
+
+                    ContextCompat
+                        .getMainExecutor(context)
+                        .execute {
+
+                            detections.clear()
+                            detections.addAll(newDetections)
+                            fps = currentFps
+                        }
+                }
+
+                // warmup完了後にAnalyzer attach
+                imageAnalysis.setAnalyzer(
+                    executor,
+                    detector
+                )
+
+                Log.d("LiteRT", "Analyzer attached")
             }
 
-        try {
-            cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                CameraSelector.DEFAULT_BACK_CAMERA,
-                preview,
-                imageAnalysis
-            )
-        } catch (e: Exception) {
-            Log.e("CameraX", "Binding failed", e)
-        }
+        }, ContextCompat.getMainExecutor(context))
     }
-
     // 画面の描画
     Box(Modifier.fillMaxSize()) {
         // カメラのプレビュー
