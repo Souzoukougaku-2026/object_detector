@@ -1,7 +1,7 @@
 package com.example.wasuremono_prj.data
 
 data class Detection(
-    val label: String,
+    val classname: String,
     val score: Float,
-    val box: FloatArray
+    val bbox: FloatArray
 )

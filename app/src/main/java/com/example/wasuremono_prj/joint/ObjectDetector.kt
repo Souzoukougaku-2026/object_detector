@@ -1,8 +1,11 @@
-package com.example.wasuremono_prj.detector
+package com.example.wasuremono_prj.joint
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.RectF
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -17,7 +20,7 @@ import org.tensorflow.lite.support.common.ops.NormalizeOp
 import org.tensorflow.lite.support.image.ImageProcessor
 import org.tensorflow.lite.support.image.TensorImage
 
-class ObjectDetector(private val context: Context) : ImageAnalysis.Analyzer {
+class ObjectDetector(private val context: Context) {
 
     private var interpreter: Interpreter? = null
     private var labels: List<String> = emptyList()
@@ -78,24 +81,11 @@ class ObjectDetector(private val context: Context) : ImageAnalysis.Analyzer {
         .add(NormalizeOp(0f, 255f))
         .build()
 
-    override fun analyze(imageProxy: ImageProxy) {
+    fun runDetect(originalBitmap: Bitmap) {
 
         val totalStart = System.nanoTime()
 
         val interp = interpreter
-
-        if (interp == null) {
-            imageProxy.close()
-            return
-        }
-
-        val rotation = imageProxy.imageInfo.rotationDegrees
-
-        lateinit var originalBitmap: Bitmap
-
-        logTime("1_toBitmap") {
-            originalBitmap = imageProxy.toBitmap()
-        }
 
         lateinit var letterboxedBitmap: Bitmap
 
@@ -104,7 +94,6 @@ class ObjectDetector(private val context: Context) : ImageAnalysis.Analyzer {
             letterboxedBitmap =
                 finalLetterbox(
                     originalBitmap,
-                    rotation,
                     Config.MODEL_INPUT_SIZE
                 ).first
         }
@@ -115,7 +104,7 @@ class ObjectDetector(private val context: Context) : ImageAnalysis.Analyzer {
 
             tensor =
                 TensorImage(
-                    interp.getInputTensor(0).dataType()
+                    interp?.getInputTensor(0)?.dataType()
                 )
 
             tensor.load(letterboxedBitmap)
@@ -127,7 +116,7 @@ class ObjectDetector(private val context: Context) : ImageAnalysis.Analyzer {
 
         logTime("4_inference") {
 
-            interp.runForMultipleInputsOutputs(
+            interp?.runForMultipleInputsOutputs(
                 arrayOf(tensor.buffer),
                 outputs
             )
@@ -191,6 +180,7 @@ class ObjectDetector(private val context: Context) : ImageAnalysis.Analyzer {
                                 x2,
                                 y2
                             )
+
                         )
                     )
                 }
@@ -215,7 +205,7 @@ class ObjectDetector(private val context: Context) : ImageAnalysis.Analyzer {
             letterboxedBitmap.recycle()
             originalBitmap.recycle()
 
-            imageProxy.close()
+
         }
 
         val totalMs =
@@ -228,7 +218,7 @@ class ObjectDetector(private val context: Context) : ImageAnalysis.Analyzer {
         )
     }
 
-    private fun finalLetterbox(bitmap: Bitmap, rotation: Int, size: Int): Triple<Bitmap, Float, Pair<Float, Float>> {
+    private fun finalLetterbox(bitmap: Bitmap, size: Int, rotation: Int = 0): Triple<Bitmap, Float, Pair<Float, Float>> {
         val srcW = bitmap.width
         val srcH = bitmap.height
 
@@ -243,14 +233,14 @@ class ObjectDetector(private val context: Context) : ImageAnalysis.Analyzer {
         val dy = (size - newH) / 2f
 
         val destBitmap = createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(destBitmap)
-        canvas.drawColor(android.graphics.Color.BLACK)
+        val canvas = Canvas(destBitmap)
+        canvas.drawColor(Color.BLACK)
 
         val drawMatrix = Matrix().apply {
             postRotate(rotation.toFloat())
         }
 
-        val rect = android.graphics.RectF(0f, 0f, srcW.toFloat(), srcH.toFloat())
+        val rect = RectF(0f, 0f, srcW.toFloat(), srcH.toFloat())
         drawMatrix.mapRect(rect)
 
         drawMatrix.postTranslate(-rect.left, -rect.top)
@@ -275,7 +265,7 @@ class ObjectDetector(private val context: Context) : ImageAnalysis.Analyzer {
             val iterator = sorted.iterator()
             while (iterator.hasNext()) {
                 val next = iterator.next()
-                if (calculateIoU(first.box, next.box) > 0.45f) {
+                if (calculateIoU(first.bbox, next.bbox) > 0.45f) {
                     iterator.remove()
                 }
             }
