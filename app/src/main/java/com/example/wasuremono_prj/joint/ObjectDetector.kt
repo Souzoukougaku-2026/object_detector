@@ -7,8 +7,6 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.RectF
 import android.util.Log
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
 import androidx.core.graphics.createBitmap
 import com.example.wasuremono_prj.data.Config
 import com.example.wasuremono_prj.data.Detection
@@ -16,9 +14,8 @@ import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.gpu.CompatibilityList
 import org.tensorflow.lite.gpu.GpuDelegate
 import org.tensorflow.lite.support.common.FileUtil
-import org.tensorflow.lite.support.common.ops.NormalizeOp
-import org.tensorflow.lite.support.image.ImageProcessor
-import org.tensorflow.lite.support.image.TensorImage
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class ObjectDetector(private val context: Context) {
 
@@ -26,12 +23,21 @@ class ObjectDetector(private val context: Context) {
     private var labels: List<String> = emptyList()
     private var lastTime = System.currentTimeMillis()
 
-    // 固定バッファ。再利用してGCを減らす
-    private val outputBuffer = Array(1) { Array(9) { FloatArray(3549) } }
+    // 8400アンカー用固定バッファ (1, 4 + 6, 8400)
+    private val outputBuffer = Array(1) { Array(10) { FloatArray(8400) } }
 
-    // 検出結果の一時格納用（リサイズして使い回すことで、毎フレームのList生成を抑制）
+    // 検出結果の一時格納用（リサイズして使い回すことで毎フレームのList生成を抑制）
     private val detectionPool = ArrayList<Detection>(100)
+    private val inputSize = Config.MODEL_INPUT_SIZE
 
+    private val floatArrayBuffer = FloatArray(3 * inputSize * inputSize)
+    private val inv255 = 1f / 255f // 除算を乗算に変換して高速化
+
+    private val inputBuffer =
+        ByteBuffer.allocateDirect(1 * 3 * inputSize * inputSize * 4)
+            .order(ByteOrder.nativeOrder())
+
+    private val pixelBuffer = IntArray(inputSize * inputSize)
     var onResults: ((detections: List<Detection>, fps: Float) -> Unit)? = null
 
     init {
@@ -42,23 +48,17 @@ class ObjectDetector(private val context: Context) {
         try {
             val model = FileUtil.loadMappedFile(context, Config.MODEL_PATH)
 
-
-            val compatList = CompatibilityList()
             val options = Interpreter.Options().apply {
                 try {
-
                     val delegateOptions = GpuDelegate.Options().apply {
-
                         isPrecisionLossAllowed = true
-
                         setSerializationParams(
                             context.codeCacheDir.absolutePath,
                             "yolo_v1"
                         )
+                        setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_SUSTAINED_SPEED)
                     }
-
                     this.addDelegate(GpuDelegate(delegateOptions))
-
                     Log.d("LiteRT", "GPU Delegation is valid on this device")
                 } catch (e: Exception) {
                     this.setNumThreads(4)
@@ -67,120 +67,88 @@ class ObjectDetector(private val context: Context) {
                 }
             }
 
-
-
             interpreter = Interpreter(model, options)
-            labels = listOf("cellphone", "earphone_case", "earphones", "key", "wallet")
+
+            val inputTensor = interpreter?.getInputTensor(0)
+            val outputTensor = interpreter?.getOutputTensor(0)
+            Log.d("MODEL_SHAPE", "Input Tensor Shape: ${inputTensor?.shape()?.contentToString()}")
+            Log.d("MODEL_SHAPE", "Output Tensor Shape: ${outputTensor?.shape()?.contentToString()}")
+            Log.d("MODEL_SHAPE", "Output Tensor DataType: ${outputTensor?.dataType()}")
+
+            labels = listOf("bottle", "headphone", "key", "smartphone", "umbrella", "wallet")
             Log.d("LiteRT", "Loaded labels size = ${labels.size}")
         } catch (e: Exception) {
             Log.e("LiteRT", "Model init failed", e)
         }
     }
 
-    private val processor = ImageProcessor.Builder()
-        .add(NormalizeOp(0f, 255f))
-        .build()
-
     fun runDetect(originalBitmap: Bitmap) {
-
         val totalStart = System.nanoTime()
-
-        val interp = interpreter
+        val interp = interpreter ?: return
 
         lateinit var letterboxedBitmap: Bitmap
 
         logTime("2_letterbox") {
-
-            letterboxedBitmap =
-                finalLetterbox(
-                    originalBitmap,
-                    Config.MODEL_INPUT_SIZE
-                ).first
+            letterboxedBitmap = finalLetterbox(
+                originalBitmap,
+                Config.MODEL_INPUT_SIZE
+            ).first
         }
 
-        lateinit var tensor: TensorImage
-
         logTime("3_tensor_prepare") {
-
-            tensor =
-                TensorImage(
-                    interp?.getInputTensor(0)?.dataType()
-                )
-
-            tensor.load(letterboxedBitmap)
-
-            tensor = processor.process(tensor)
+            bitmapToChwBuffer(
+                letterboxedBitmap,
+                inputBuffer,
+                pixelBuffer,
+                inputSize
+            )
         }
 
         val outputs = mapOf(0 to outputBuffer)
 
         logTime("4_inference") {
-
-            interp?.runForMultipleInputsOutputs(
-                arrayOf(tensor.buffer),
+            interp.runForMultipleInputsOutputs(
+                arrayOf(inputBuffer),
                 outputs
             )
         }
 
+        logRawOutput(outputBuffer[0])
+
         lateinit var finalResults: List<Detection>
 
         logTime("5_parse+nms") {
-
             detectionPool.clear()
-
             val rawData = outputBuffer[0]
 
-            for (i in 0 until 3549) {
-
+            for (i in 0 until 8400) {
                 var maxScore = 0f
                 var classId = -1
 
-                for (c in 0 until 5) {
-
+                for (c in 0 until 6) {
                     val score = rawData[4 + c][i]
-
                     if (score > maxScore) {
                         maxScore = score
                         classId = c
                     }
                 }
 
-                if (maxScore >
-                    Config.CONFIDENCE_THRESHOLD
-                ) {
-
+                if (maxScore > Config.CONFIDENCE_THRESHOLD) {
                     val cx = rawData[0][i]
                     val cy = rawData[1][i]
                     val w = rawData[2][i]
                     val h = rawData[3][i]
 
-                    val x1 =
-                        ((cx - w / 2f) / 416f)
-                            .coerceIn(0f, 1f)
-
-                    val y1 =
-                        ((cy - h / 2f) / 416f)
-                            .coerceIn(0f, 1f)
-
-                    val x2 =
-                        ((cx + w / 2f) / 416f)
-                            .coerceIn(0f, 1f)
-
-                    val y2 =
-                        ((cy + h / 2f) / 416f)
-                            .coerceIn(0f, 1f)
+                    val x1 = (cx - w / 2f).coerceIn(0f, 1f)
+                    val y1 = (cy - h / 2f).coerceIn(0f, 1f)
+                    val x2 = (cx + w / 2f).coerceIn(0f, 1f)
+                    val y2 = (cy + h / 2f).coerceIn(0f, 1f)
 
                     detectionPool.add(
                         Detection(
                             labels[classId],
                             maxScore,
-                            floatArrayOf(
-                                x1,
-                                y1,
-                                x2,
-                                y2
-                            )
-
+                            floatArrayOf(x1, y1, x2, y2)
                         )
                     )
                 }
@@ -190,32 +158,20 @@ class ObjectDetector(private val context: Context) {
         }
 
         val now = System.currentTimeMillis()
-
         val fps = 1000f / (now - lastTime)
-
         lastTime = now
 
         logTime("6_callback") {
-
             onResults?.invoke(finalResults, fps)
         }
 
         logTime("7_recycle") {
-
             letterboxedBitmap.recycle()
             originalBitmap.recycle()
-
-
         }
 
-        val totalMs =
-            (System.nanoTime() - totalStart) /
-                    1_000_000.0
-
-        Log.d(
-            "TIME_DEBUG",
-            "TOTAL : ${"%.2f".format(totalMs)} ms"
-        )
+        val totalMs = (System.nanoTime() - totalStart) / 1_000_000.0
+        Log.d("TIME_DEBUG", "TOTAL : ${"%.2f".format(totalMs)} ms")
     }
 
     private fun finalLetterbox(bitmap: Bitmap, size: Int, rotation: Int = 0): Triple<Bitmap, Float, Pair<Float, Float>> {
@@ -285,23 +241,65 @@ class ObjectDetector(private val context: Context) {
 
         return intersection / (area1 + area2 - intersection)
     }
-    private inline fun logTime(
-        name: String,
-        block: () -> Unit
-    ): Double {
 
+    private fun logRawOutput(rawData: Array<FloatArray>) {
+        Log.d("RAW_DEBUG", "--- Inference Raw Data Snippet (Total 8400 columns) ---")
+        var matchCount = 0
+        for (i in 0 until 8400) {
+            val cx = rawData[0][i]
+            val cy = rawData[1][i]
+            val w = rawData[2][i]
+            val h = rawData[3][i]
+
+            val scores = FloatArray(6) { c -> rawData[4 + c][i] }
+            val classId = scores.indices.maxByOrNull { scores[it] } ?: 0
+            val maxScore = scores[classId]
+
+            if (maxScore > 0.1f && matchCount < 10) {
+                matchCount++
+                val scoresString = scores.joinToString(", ") { "%.3f".format(it) }
+                Log.d(
+                    "RAW_DEBUG",
+                    "Index: $i | RawBox[cx=%.2f, cy=%.2f, w=%.2f, h=%.2f] | MaxClass: ${labels.getOrNull(classId)} (Score: %.3f) | AllScores: [$scoresString]".format(cx, cy, w, h, maxScore)
+                )
+            }
+        }
+        Log.d("RAW_DEBUG", "------------------------------------------------------")
+    }
+
+    private inline fun logTime(name: String, block: () -> Unit): Double {
         val start = System.nanoTime()
-
         block()
-
         val end = System.nanoTime()
-
         val ms = (end - start) / 1_000_000.0
-
         Log.d("TIME_DEBUG", "$name : ${"%.2f".format(ms)} ms")
-
         return ms
     }
+
+    private fun bitmapToChwBuffer(
+        bitmap: Bitmap,
+        buffer: ByteBuffer,
+        pixels: IntArray,
+        size: Int
+    ) {
+        buffer.rewind()
+        bitmap.getPixels(pixels, 0, size, 0, 0, size, size)
+
+        val planeSize = size * size
+        val rOffset = 0
+        val gOffset = planeSize
+        val bOffset = planeSize * 2
+
+        for (i in 0 until planeSize) {
+            val pixel = pixels[i]
+            floatArrayBuffer[rOffset + i] = ((pixel shr 16) and 0xFF) * inv255
+            floatArrayBuffer[gOffset + i] = ((pixel shr 8) and 0xFF) * inv255
+            floatArrayBuffer[bOffset + i] = (pixel and 0xFF) * inv255
+        }
+
+        buffer.asFloatBuffer().put(floatArrayBuffer)
+    }
+
     fun close() {
         interpreter?.close()
         interpreter = null

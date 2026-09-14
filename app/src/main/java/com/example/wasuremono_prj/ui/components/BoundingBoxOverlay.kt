@@ -46,7 +46,7 @@ fun BoundingBoxOverlay(detections: List<Detection>) {
         val previewHeight = size.height
 
         detections.forEach { detection ->
-            val box = detection.box
+            val box = detection.bbox
 
             // 90度の回転
             val left = box[0] * previewWidth
@@ -64,7 +64,7 @@ fun BoundingBoxOverlay(detections: List<Detection>) {
 
             // == ラベルの描画 ==
 
-            val labelText = "${detection.label}: %.2f".format(detection.score)
+            val labelText = "${detection.classname}: %.2f".format(detection.score)
             val textBounds = Rect()
             textPaint.getTextBounds(labelText, 0, labelText.length, textBounds)
             val textWidth = textPaint.measureText(labelText)
