@@ -37,6 +37,17 @@ class MainActivity : ComponentActivity() {
             requestPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
 
+        // バックグラウンド処理テスト
+//        val dummyMLWorRequest =
+//            OneTimeWorkRequestBuilder<MLWorker>().build()
+//
+//        WorkManager.getInstance(this)
+//            .enqueueUniqueWork(
+//                "ml_work",
+//                ExistingWorkPolicy.KEEP,
+//                dummyMLWorRequest
+//            )
+
         setContent {
             Wasuremono_prjTheme {
                 val context = LocalContext.current
