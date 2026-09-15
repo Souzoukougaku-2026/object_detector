@@ -136,7 +136,7 @@ fun DetectorScreen() {
     ) {
         Text("FPS: %.1f".format(fps), color = Color.Yellow)
         detections.forEach {
-            Text("${it.label}: %.2f".format(it.score), color = Color.Green)
+            Text("${it.classname}: %.2f".format(it.score), color = Color.Green)
         }
     }
 }
